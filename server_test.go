@@ -382,3 +382,45 @@ func TestConn_ManyConcurrentWrites(t *testing.T) {
 
 	a.EqualValues(atomic.LoadInt64(&finishedMessages), messagesNumber)
 }
+
+func TestClient_SynchronWaiting(t *testing.T) {
+	a := assert.New(t)
+	testEvent := "test_event"
+	testEventData := []byte("testdata")
+
+	server, httpServer := SetupTestServer()
+	defer httpServer.Close()
+
+	server.OnDefault(func(event string, conn Conn, data []byte) {
+		a.Fail("OnDefault", string(data))
+	})
+	server.OnError(func(conn Conn, err error) {
+		a.Fail("OnError", err)
+	})
+	var connect Conn
+	server.OnConnect(func(c Conn) {
+		connect = c
+	})
+
+	cli := SetupTestClient(httpServer.URL, httpServer.Client())
+	defer cli.Close()
+
+	cli.OnWithAck(testEvent, func(data []byte) []byte {
+		<-time.After(1 * time.Second)
+		return []byte("Ok")
+	})
+
+	go func() {
+		resp, err := connect.EmitWithAck(context.Background(), testEvent, testEventData)
+		fmt.Println(resp, err)
+	}()
+
+	<-time.After(100 * time.Millisecond)
+	startTime := time.Now()
+	cli.Ping(context.Background())
+
+	fmt.Println(time.Now().Sub(startTime))
+	if time.Now().Sub(startTime) < 900*time.Millisecond {
+		t.Errorf("Ping ponged asynchron")
+	}
+}

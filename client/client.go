@@ -56,7 +56,19 @@ type client struct {
 	closed            bool
 }
 
+type EventMsg struct {
+	event string
+	reqId uint64
+	body  []byte
+}
+
 func NewClient(config Config) Client {
+	if config.WorkersNum <= 0 {
+		config.WorkersNum = 1
+	}
+	if config.WorkersChanBufferMultiplier <= 0 {
+		config.WorkersChanBufferMultiplier = 2
+	}
 	return &client{
 		handlers:       make(map[string]func(data []byte)),
 		ackHandlers:    make(map[string]func(data []byte) []byte),
@@ -124,8 +136,10 @@ func (cl *client) Dial(ctx context.Context, url string) error {
 	if cl.config.ConnectionReadLimit != 0 {
 		c.SetReadLimit(cl.config.ConnectionReadLimit)
 	}
+	workersChan := cl.makeWorkers()
+
 	cl.onConnect()
-	go cl.serveRead()
+	go cl.serveRead(workersChan) // TODO <---------------------------------
 	return nil
 }
 
@@ -183,10 +197,10 @@ func (cl *client) OnError(f func(error)) Client {
 	return cl
 }
 
-func (cl *client) serveRead() {
+func (cl *client) serveRead(workersChan chan<- EventMsg) {
 	var err error
 	for {
-		err = cl.readConn()
+		err = cl.readConn(workersChan) // TODO <----------------------
 		if err != nil {
 			cl.close()
 			cl.onDisconnect(err)
@@ -195,7 +209,32 @@ func (cl *client) serveRead() {
 	}
 }
 
-func (cl *client) readConn() error {
+func (cl *client) makeWorkers() chan EventMsg {
+	workersChan := make(chan EventMsg, cl.config.WorkersChanBufferMultiplier)
+	for i := 0; i < cl.config.WorkersNum; i++ {
+		go func() {
+			buf := bpool.Get() // TODO понять зачем он тут вобще
+			defer bpool.Put(buf)
+
+			for {
+				// todo сделать завершение работы воркера, селект ctx.done или вроде того
+				msg := <-workersChan
+				if handler, ok := cl.getAckHandler(msg.event); ok {
+					answer := handler(msg.body)
+					buf.Reset()
+					parser.EncodeEventToBuffer(buf, ack.Event(msg.event), msg.reqId, answer)
+					err := cl.con.Write(cl.globalCtx, websocket.MessageText, buf.Bytes())
+					if err != nil {
+						cl.onError(fmt.Errorf("ack to event %s err: %w", msg.event, err))
+					}
+				}
+			}
+		}()
+	}
+	return workersChan
+}
+
+func (cl *client) readConn(workersChan chan<- EventMsg) error {
 	_, r, err := cl.con.Reader(cl.globalCtx)
 	if err != nil {
 		return err
@@ -221,15 +260,7 @@ func (cl *client) readConn() error {
 		return nil
 	}
 	if reqId > 0 {
-		if handler, ok := cl.getAckHandler(event); ok {
-			answer := handler(body)
-			buf.Reset()
-			parser.EncodeEventToBuffer(buf, ack.Event(event), reqId, answer)
-			err := cl.con.Write(cl.globalCtx, websocket.MessageText, buf.Bytes())
-			if err != nil {
-				cl.onError(fmt.Errorf("ack to event %s err: %w", event, err))
-			}
-		}
+		workersChan <- EventMsg{event: event, reqId: reqId, body: body}
 		return nil
 	}
 

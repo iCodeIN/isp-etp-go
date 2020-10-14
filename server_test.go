@@ -400,6 +400,7 @@ func TestClient_SynchronWaiting(t *testing.T) {
 	var connect Conn
 	server.OnConnect(func(c Conn) {
 		connect = c
+		fmt.Println("OnConnect")
 	})
 
 	cli := SetupTestClient(httpServer.URL, httpServer.Client())
@@ -411,16 +412,21 @@ func TestClient_SynchronWaiting(t *testing.T) {
 	})
 
 	go func() {
+		fmt.Println("Before")
 		resp, err := connect.EmitWithAck(context.Background(), testEvent, testEventData)
+		fmt.Println("After")
 		fmt.Println(resp, err)
 	}()
 
 	<-time.After(100 * time.Millisecond)
 	startTime := time.Now()
-	cli.Ping(context.Background())
-
+	//cli.Ping(context.Background())
+	connect.Ping(context.Background())
 	fmt.Println(time.Now().Sub(startTime))
 	if time.Now().Sub(startTime) < 900*time.Millisecond {
 		t.Errorf("Ping ponged asynchron")
 	}
+
+	//Если не добавить ожидание - коннект преждевременно завершается
+	<-time.After(901 * time.Millisecond)
 }

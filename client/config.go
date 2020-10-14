@@ -10,4 +10,8 @@ type Config struct {
 	HttpClient *http.Client
 	// May be nil
 	HttpHeaders http.Header
+	// Default is 1
+	WorkersNum int
+	// Default is 2
+	WorkersChanBufferMultiplier int
 }

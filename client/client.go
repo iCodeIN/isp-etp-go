@@ -266,7 +266,11 @@ func (cl *client) readConn() error {
 		}
 		return nil
 	}
-	cl.workersCh <- EventMsg{event: event, reqId: reqId, body: body}
+
+	msg := EventMsg{event: event, reqId: reqId}
+	msg.body = make([]byte, len(body))
+	copy(msg.body, body)
+	cl.workersCh <- msg //EventMsg{event: event, reqId: reqId, body: body}
 	return nil
 }
 

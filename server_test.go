@@ -30,11 +30,12 @@ func SetupTestServer() (Server, *httptest.Server) {
 }
 
 func SetupTestClient(address string, cl *http.Client) client.Client {
+	return SetupTestClientWithConfig(address, client.Config{HttpClient: cl})
+}
+
+func SetupTestClientWithConfig(address string, config client.Config) client.Client {
 	address = strings.Replace(address, "http://", "ws://", 1)
 	address = address + "/isp-etp/"
-	config := client.Config{
-		HttpClient: cl,
-	}
 	client := client.NewClient(config)
 	err := client.Dial(context.TODO(), address)
 	if err != nil {
@@ -383,41 +384,58 @@ func TestConn_ManyConcurrentWrites(t *testing.T) {
 	a.EqualValues(atomic.LoadInt64(&finishedMessages), messagesNumber)
 }
 
-func TestClient_AsynchronDefault(t *testing.T) {
-	a := assert.New(t)
+func clientHandlersWorkersTesting(t *testing.T, WorkersNum, WorkersChanBufferMultiplier int) {
 	testEvent := "test_event"
-	testEventData := []byte("testdata")
+	testAckEvent := "test_ack_event"
+	testDefaultEvent := "test_default_event"
 
 	server, httpServer := SetupTestServer()
 	defer httpServer.Close()
 
-	server.OnDefault(func(event string, conn Conn, data []byte) {
-		a.Fail("OnDefault", string(data))
-	})
-	server.OnError(func(conn Conn, err error) {
-		a.Fail("OnError", err)
-	})
 	var connect Conn
 	server.OnConnect(func(c Conn) {
 		connect = c
-		fmt.Println("OnConnect")
 	})
 
-	cli := SetupTestClient(httpServer.URL, httpServer.Client())
+	cli := SetupTestClientWithConfig(httpServer.URL, client.Config{
+		HttpClient:                  httpServer.Client(),
+		WorkersNum:                  WorkersNum,
+		WorkersChanBufferMultiplier: WorkersChanBufferMultiplier,
+	})
 	defer cli.Close()
 
-	cli.OnWithAck(testEvent, func(data []byte) []byte {
-		time.Sleep(1 * time.Second)
+	cli.OnWithAck(testAckEvent, func(data []byte) []byte {
+		time.Sleep(500 * time.Millisecond)
 		return []byte("Ok")
+	})
+	cli.On(testEvent, func(data []byte) {
+		time.Sleep(500 * time.Millisecond)
+	})
+	cli.OnDefault(func(event string, data []byte) {
+		time.Sleep(500 * time.Millisecond)
 	})
 
 	wg := &sync.WaitGroup{}
-	wg.Add(1)
+	wg.Add(3)
 	go func() {
 		defer wg.Done()
-		resp, err := connect.EmitWithAck(context.Background(), testEvent, testEventData)
+		resp, err := connect.EmitWithAck(context.Background(), testAckEvent, []byte(testAckEvent))
 		if err != nil {
 			t.Errorf("EmitWithAck was returned error: %v, with responce: %v", err, resp)
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		err := connect.Emit(context.Background(), testEvent, []byte(testEvent))
+		if err != nil {
+			t.Errorf("Emit with event: %s was returned error: %v", testEvent, err)
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		err := connect.Emit(context.Background(), testDefaultEvent, []byte(testDefaultEvent))
+		if err != nil {
+			t.Errorf("Emit with event: %s was returned error: %v", testDefaultEvent, err)
 		}
 	}()
 	time.Sleep(100 * time.Millisecond)
@@ -436,58 +454,15 @@ func TestClient_AsynchronDefault(t *testing.T) {
 	wg.Wait()
 }
 
-func TestClient_AsynchronOverflow(t *testing.T) {
-	a := assert.New(t)
-	testEvent := "test_event"
-	testEventData := []byte("testdata")
+func TestClientHandlersWorkers_SyncDefault(t *testing.T) {
+	clientHandlersWorkersTesting(t, 0, 0)
+}
 
-	server, httpServer := SetupTestServer()
-	defer httpServer.Close()
-
-	server.OnDefault(func(event string, conn Conn, data []byte) {
-		a.Fail("OnDefault", string(data))
-	})
-	server.OnError(func(conn Conn, err error) {
-		a.Fail("OnError", err)
-	})
-	var connect Conn
-	server.OnConnect(func(c Conn) {
-		connect = c
-		fmt.Println("OnConnect")
-	})
-
-	cli := SetupTestClient(httpServer.URL, httpServer.Client())
-	defer cli.Close()
-
-	cli.OnWithAck(testEvent, func(data []byte) []byte {
-		time.Sleep(1 * time.Second)
-		return []byte("Ok")
-	})
-
-	wg := &sync.WaitGroup{}
-	for i := 0; i < 4; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			resp, err := connect.EmitWithAck(context.Background(), testEvent, testEventData)
-			if err != nil {
-				t.Errorf("EmitWithAck was returned error: %v, with responce: %v", err, resp)
-			}
-		}()
-	}
-	time.Sleep(100 * time.Millisecond)
-
+func TestClientHandlersWorkers_AsyncDefault(t *testing.T) {
 	startTime := time.Now()
-	if err := connect.Ping(context.Background()); err != nil {
-		t.Errorf("Ping was returned error: %v, ", err)
-	}
-
+	clientHandlersWorkersTesting(t, 3, 0)
 	deltaTime := time.Now().Sub(startTime)
-
-	fmt.Println(deltaTime)
-	if deltaTime > 10*time.Millisecond {
-		t.Errorf("Ping Blocked")
+	if deltaTime > 550*time.Millisecond {
+		t.Errorf("Asynchron handling by workers is not working: Time expected less: 0.55s, got: %v", deltaTime)
 	}
-
-	wg.Wait()
 }

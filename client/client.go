@@ -65,10 +65,10 @@ type EventMsg struct {
 
 func NewClient(config Config) Client {
 	if config.WorkersNum <= 0 {
-		config.WorkersNum = 1
+		config.WorkersNum = defaultWorkersNum
 	}
 	if config.WorkersChanBufferMultiplier <= 0 {
-		config.WorkersChanBufferMultiplier = 2
+		config.WorkersChanBufferMultiplier = defaultWorkersChanBufferMultiplier
 	}
 	return &client{
 		handlers:       make(map[string]func(data []byte)),
@@ -218,14 +218,23 @@ func (cl *client) startWorkers() {
 			defer bpool.Put(buf)
 
 			for msg := range cl.workersCh {
-				if handler, ok := cl.getAckHandler(msg.event); ok {
-					answer := handler(msg.body)
-					buf.Reset()
-					parser.EncodeEventToBuffer(buf, ack.Event(msg.event), msg.reqId, answer)
-					err := cl.con.Write(cl.globalCtx, websocket.MessageText, buf.Bytes())
-					if err != nil {
-						cl.onError(fmt.Errorf("ack to event %s err: %w", msg.event, err))
+				if msg.reqId > 0 {
+					if handler, ok := cl.getAckHandler(msg.event); ok {
+						answer := handler(msg.body)
+						buf.Reset()
+						parser.EncodeEventToBuffer(buf, ack.Event(msg.event), msg.reqId, answer)
+						err := cl.con.Write(cl.globalCtx, websocket.MessageText, buf.Bytes())
+						if err != nil {
+							cl.onError(fmt.Errorf("ack to event %s err: %w", msg.event, err))
+						}
 					}
+					continue
+				}
+				handler, ok := cl.getHandler(msg.event)
+				if ok {
+					handler(msg.body)
+				} else {
+					cl.onDefault(msg.event, msg.body)
 				}
 			}
 		}()
@@ -257,17 +266,7 @@ func (cl *client) readConn() error {
 		}
 		return nil
 	}
-	if reqId > 0 {
-		cl.workersCh <- EventMsg{event: event, reqId: reqId, body: body}
-		return nil
-	}
-
-	handler, ok := cl.getHandler(event)
-	if ok {
-		handler(body)
-	} else {
-		cl.onDefault(event, body)
-	}
+	cl.workersCh <- EventMsg{event: event, reqId: reqId, body: body}
 	return nil
 }
 

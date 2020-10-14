@@ -51,6 +51,7 @@ type client struct {
 	globalCtx         context.Context
 	cancel            context.CancelFunc
 	config            Config
+	workersCh         chan EventMsg
 	closeCh           chan struct{}
 	closeOnce         sync.Once
 	closed            bool
@@ -74,6 +75,7 @@ func NewClient(config Config) Client {
 		ackHandlers:    make(map[string]func(data []byte) []byte),
 		ackers:         ack.NewAckers(),
 		closeCh:        make(chan struct{}),
+		workersCh:      make(chan EventMsg, config.WorkersNum*config.WorkersChanBufferMultiplier),
 		reqIdGenerator: &gen.DefaultReqIdGenerator{},
 		config:         config,
 	}
@@ -136,10 +138,10 @@ func (cl *client) Dial(ctx context.Context, url string) error {
 	if cl.config.ConnectionReadLimit != 0 {
 		c.SetReadLimit(cl.config.ConnectionReadLimit)
 	}
-	workersChan := cl.makeWorkers()
+	cl.startWorkers()
 
 	cl.onConnect()
-	go cl.serveRead(workersChan) // TODO <---------------------------------
+	go cl.serveRead()
 	return nil
 }
 
@@ -197,10 +199,10 @@ func (cl *client) OnError(f func(error)) Client {
 	return cl
 }
 
-func (cl *client) serveRead(workersChan chan<- EventMsg) {
+func (cl *client) serveRead() {
 	var err error
 	for {
-		err = cl.readConn(workersChan) // TODO <----------------------
+		err = cl.readConn()
 		if err != nil {
 			cl.close()
 			cl.onDisconnect(err)
@@ -209,16 +211,13 @@ func (cl *client) serveRead(workersChan chan<- EventMsg) {
 	}
 }
 
-func (cl *client) makeWorkers() chan EventMsg {
-	workersChan := make(chan EventMsg, cl.config.WorkersChanBufferMultiplier)
+func (cl *client) startWorkers() {
 	for i := 0; i < cl.config.WorkersNum; i++ {
 		go func() {
-			buf := bpool.Get() // TODO понять зачем он тут вобще
+			buf := bpool.Get()
 			defer bpool.Put(buf)
 
-			for {
-				// todo сделать завершение работы воркера, селект ctx.done или вроде того
-				msg := <-workersChan
+			for msg := range cl.workersCh {
 				if handler, ok := cl.getAckHandler(msg.event); ok {
 					answer := handler(msg.body)
 					buf.Reset()
@@ -231,10 +230,9 @@ func (cl *client) makeWorkers() chan EventMsg {
 			}
 		}()
 	}
-	return workersChan
 }
 
-func (cl *client) readConn(workersChan chan<- EventMsg) error {
+func (cl *client) readConn() error {
 	_, r, err := cl.con.Reader(cl.globalCtx)
 	if err != nil {
 		return err
@@ -260,7 +258,7 @@ func (cl *client) readConn(workersChan chan<- EventMsg) error {
 		return nil
 	}
 	if reqId > 0 {
-		workersChan <- EventMsg{event: event, reqId: reqId, body: body}
+		cl.workersCh <- EventMsg{event: event, reqId: reqId, body: body}
 		return nil
 	}
 
@@ -276,6 +274,7 @@ func (cl *client) readConn(workersChan chan<- EventMsg) error {
 func (cl *client) close() {
 	cl.closeOnce.Do(func() {
 		close(cl.closeCh)
+		close(cl.workersCh)
 		cl.closed = true
 	})
 }

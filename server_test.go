@@ -383,7 +383,7 @@ func TestConn_ManyConcurrentWrites(t *testing.T) {
 	a.EqualValues(atomic.LoadInt64(&finishedMessages), messagesNumber)
 }
 
-func TestClient_SynchronWaiting(t *testing.T) {
+func TestClient_AsynchronDefault(t *testing.T) {
 	a := assert.New(t)
 	testEvent := "test_event"
 	testEventData := []byte("testdata")
@@ -407,26 +407,87 @@ func TestClient_SynchronWaiting(t *testing.T) {
 	defer cli.Close()
 
 	cli.OnWithAck(testEvent, func(data []byte) []byte {
-		<-time.After(1 * time.Second)
+		time.Sleep(1 * time.Second)
 		return []byte("Ok")
 	})
 
+	wg := &sync.WaitGroup{}
+	wg.Add(1)
 	go func() {
-		fmt.Println("Before")
+		defer wg.Done()
 		resp, err := connect.EmitWithAck(context.Background(), testEvent, testEventData)
-		fmt.Println("After")
-		fmt.Println(resp, err)
+		if err != nil {
+			t.Errorf("EmitWithAck was returned error: %v, with responce: %v", err, resp)
+		}
 	}()
+	time.Sleep(100 * time.Millisecond)
 
-	<-time.After(100 * time.Millisecond)
 	startTime := time.Now()
-	//cli.Ping(context.Background())
-	connect.Ping(context.Background())
-	fmt.Println(time.Now().Sub(startTime))
-	if time.Now().Sub(startTime) < 900*time.Millisecond {
-		t.Errorf("Ping ponged asynchron")
+	if err := connect.Ping(context.Background()); err != nil {
+		t.Errorf("Ping was returned error: %v, ", err)
+	}
+	deltaTime := time.Now().Sub(startTime)
+
+	fmt.Println(deltaTime)
+	if deltaTime > 10*time.Millisecond {
+		t.Errorf("Ping Blocked")
 	}
 
-	//Если не добавить ожидание - коннект преждевременно завершается
-	<-time.After(901 * time.Millisecond)
+	wg.Wait()
+}
+
+func TestClient_AsynchronOverflow(t *testing.T) {
+	a := assert.New(t)
+	testEvent := "test_event"
+	testEventData := []byte("testdata")
+
+	server, httpServer := SetupTestServer()
+	defer httpServer.Close()
+
+	server.OnDefault(func(event string, conn Conn, data []byte) {
+		a.Fail("OnDefault", string(data))
+	})
+	server.OnError(func(conn Conn, err error) {
+		a.Fail("OnError", err)
+	})
+	var connect Conn
+	server.OnConnect(func(c Conn) {
+		connect = c
+		fmt.Println("OnConnect")
+	})
+
+	cli := SetupTestClient(httpServer.URL, httpServer.Client())
+	defer cli.Close()
+
+	cli.OnWithAck(testEvent, func(data []byte) []byte {
+		time.Sleep(1 * time.Second)
+		return []byte("Ok")
+	})
+
+	wg := &sync.WaitGroup{}
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			resp, err := connect.EmitWithAck(context.Background(), testEvent, testEventData)
+			if err != nil {
+				t.Errorf("EmitWithAck was returned error: %v, with responce: %v", err, resp)
+			}
+		}()
+	}
+	time.Sleep(100 * time.Millisecond)
+
+	startTime := time.Now()
+	if err := connect.Ping(context.Background()); err != nil {
+		t.Errorf("Ping was returned error: %v, ", err)
+	}
+
+	deltaTime := time.Now().Sub(startTime)
+
+	fmt.Println(deltaTime)
+	if deltaTime > 10*time.Millisecond {
+		t.Errorf("Ping Blocked")
+	}
+
+	wg.Wait()
 }

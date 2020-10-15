@@ -69,15 +69,15 @@ func NewClient(config Config) Client {
 	if config.WorkersNum <= 0 {
 		config.WorkersNum = defaultWorkersNum
 	}
-	if config.WorkersChanBufferMultiplier <= 0 {
-		config.WorkersChanBufferMultiplier = defaultWorkersChanBufferMultiplier
+	if config.WorkersBufferMultiplier <= 0 {
+		config.WorkersBufferMultiplier = defaultWorkersBufferMultiplier
 	}
 	return &client{
 		handlers:       make(map[string]func(data []byte)),
 		ackHandlers:    make(map[string]func(data []byte) []byte),
 		ackers:         ack.NewAckers(),
 		closeCh:        make(chan struct{}),
-		workersCh:      make(chan eventMsg, config.WorkersNum*config.WorkersChanBufferMultiplier),
+		workersCh:      make(chan eventMsg, config.WorkersNum*config.WorkersBufferMultiplier),
 		reqIdGenerator: &gen.DefaultReqIdGenerator{},
 		config:         config,
 	}
@@ -140,7 +140,9 @@ func (cl *client) Dial(ctx context.Context, url string) error {
 	if cl.config.ConnectionReadLimit != 0 {
 		c.SetReadLimit(cl.config.ConnectionReadLimit)
 	}
-	cl.startWorkers()
+	for i := 0; i < cl.config.WorkersNum; i++ {
+		go cl.worker()
+	}
 
 	cl.onConnect()
 	go cl.serveRead()
@@ -213,32 +215,28 @@ func (cl *client) serveRead() {
 	}
 }
 
-func (cl *client) startWorkers() {
-	for i := 0; i < cl.config.WorkersNum; i++ {
-		go func() {
-			for msg := range cl.workersCh {
-				if msg.reqId > 0 {
-					if handler, ok := cl.getAckHandler(msg.event); ok {
-						answer := handler(msg.body)
-						msg.buf.Reset()
-						parser.EncodeEventToBuffer(msg.buf, ack.Event(msg.event), msg.reqId, answer)
-						err := cl.con.Write(cl.globalCtx, websocket.MessageText, msg.buf.Bytes())
-						if err != nil {
-							cl.onError(fmt.Errorf("ack to event %s err: %w", msg.event, err))
-						}
-					}
-					bpool.Put(msg.buf)
-					continue
+func (cl *client) worker() {
+	for msg := range cl.workersCh {
+		if msg.reqId > 0 {
+			if handler, ok := cl.getAckHandler(msg.event); ok {
+				answer := handler(msg.body)
+				msg.buf.Reset()
+				parser.EncodeEventToBuffer(msg.buf, ack.Event(msg.event), msg.reqId, answer)
+				err := cl.con.Write(cl.globalCtx, websocket.MessageText, msg.buf.Bytes())
+				if err != nil {
+					cl.onError(fmt.Errorf("ack to event %s err: %w", msg.event, err))
 				}
-				handler, ok := cl.getHandler(msg.event)
-				if ok {
-					handler(msg.body)
-				} else {
-					cl.onDefault(msg.event, msg.body)
-				}
-				bpool.Put(msg.buf)
 			}
-		}()
+			bpool.Put(msg.buf)
+			continue
+		}
+		handler, ok := cl.getHandler(msg.event)
+		if ok {
+			handler(msg.body)
+		} else {
+			cl.onDefault(msg.event, msg.body)
+		}
+		bpool.Put(msg.buf)
 	}
 }
 

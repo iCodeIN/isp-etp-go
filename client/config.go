@@ -3,8 +3,8 @@ package client
 import "net/http"
 
 const (
-	defaultWorkersNum                  = 1
-	defaultWorkersChanBufferMultiplier = 10
+	defaultWorkersNum              = 1
+	defaultWorkersBufferMultiplier = 10
 )
 
 type Config struct {
@@ -17,6 +17,6 @@ type Config struct {
 	HttpHeaders http.Header
 	// Default is defaultWorkersNum
 	WorkersNum int
-	// Default is defaultWorkersChanBufferMultiplier
-	WorkersChanBufferMultiplier int
+	// Default is defaultWorkersBufferMultiplier
+	WorkersBufferMultiplier int
 }

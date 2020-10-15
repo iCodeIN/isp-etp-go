@@ -388,6 +388,7 @@ func clientHandlersWorkersTesting(t *testing.T, WorkersNum, WorkersChanBufferMul
 	testEvent := "test_event"
 	testAckEvent := "test_ack_event"
 	testDefaultEvent := "test_default_event"
+	testAckResponseData := []byte("testdata_response")
 
 	server, httpServer := SetupTestServer()
 	defer httpServer.Close()
@@ -399,15 +400,15 @@ func clientHandlersWorkersTesting(t *testing.T, WorkersNum, WorkersChanBufferMul
 	})
 
 	cli := SetupTestClientWithConfig(httpServer.URL, client.Config{
-		HttpClient:                  httpServer.Client(),
-		WorkersNum:                  WorkersNum,
-		WorkersChanBufferMultiplier: WorkersChanBufferMultiplier,
+		HttpClient:              httpServer.Client(),
+		WorkersNum:              WorkersNum,
+		WorkersBufferMultiplier: WorkersChanBufferMultiplier,
 	})
 	defer cli.Close()
 
 	cli.OnWithAck(testAckEvent, func(data []byte) []byte {
 		time.Sleep(500 * time.Millisecond)
-		return []byte("Ok")
+		return testAckResponseData
 	})
 	cli.On(testEvent, func(data []byte) {
 		time.Sleep(500 * time.Millisecond)
@@ -424,6 +425,8 @@ func clientHandlersWorkersTesting(t *testing.T, WorkersNum, WorkersChanBufferMul
 		resp, err := connect.EmitWithAck(context.Background(), testAckEvent, []byte(testAckEvent))
 		if err != nil {
 			t.Errorf("EmitWithAck was returned error: %v, with responce: %v", err, resp)
+		} else if string(resp) != string(testAckResponseData) {
+			t.Errorf("EmitWithAck was returned response: %v, but expected: %s", resp, testAckResponseData)
 		}
 	}()
 	go func() {

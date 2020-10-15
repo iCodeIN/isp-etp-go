@@ -52,13 +52,13 @@ type client struct {
 	globalCtx         context.Context
 	cancel            context.CancelFunc
 	config            Config
-	workersCh         chan EventMsg
+	workersCh         chan eventMsg
 	closeCh           chan struct{}
 	closeOnce         sync.Once
 	closed            bool
 }
 
-type EventMsg struct {
+type eventMsg struct {
 	event string
 	reqId uint64
 	body  []byte
@@ -77,7 +77,7 @@ func NewClient(config Config) Client {
 		ackHandlers:    make(map[string]func(data []byte) []byte),
 		ackers:         ack.NewAckers(),
 		closeCh:        make(chan struct{}),
-		workersCh:      make(chan EventMsg, config.WorkersNum*config.WorkersChanBufferMultiplier),
+		workersCh:      make(chan eventMsg, config.WorkersNum*config.WorkersChanBufferMultiplier),
 		reqIdGenerator: &gen.DefaultReqIdGenerator{},
 		config:         config,
 	}
@@ -272,7 +272,7 @@ func (cl *client) readConn() error {
 		}
 		return nil
 	}
-	cl.workersCh <- EventMsg{event: event, reqId: reqId, body: body, buf: buf}
+	cl.workersCh <- eventMsg{event: event, reqId: reqId, body: body, buf: buf}
 	needPutBuf = false
 	return nil
 }

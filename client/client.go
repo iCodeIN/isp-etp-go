@@ -1,6 +1,7 @@
 package client
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"sync"
@@ -61,6 +62,7 @@ type EventMsg struct {
 	event string
 	reqId uint64
 	body  []byte
+	buf   *bytes.Buffer
 }
 
 func NewClient(config Config) Client {
@@ -214,20 +216,18 @@ func (cl *client) serveRead() {
 func (cl *client) startWorkers() {
 	for i := 0; i < cl.config.WorkersNum; i++ {
 		go func() {
-			buf := bpool.Get()
-			defer bpool.Put(buf)
-
 			for msg := range cl.workersCh {
 				if msg.reqId > 0 {
 					if handler, ok := cl.getAckHandler(msg.event); ok {
 						answer := handler(msg.body)
-						buf.Reset()
-						parser.EncodeEventToBuffer(buf, ack.Event(msg.event), msg.reqId, answer)
-						err := cl.con.Write(cl.globalCtx, websocket.MessageText, buf.Bytes())
+						msg.buf.Reset()
+						parser.EncodeEventToBuffer(msg.buf, ack.Event(msg.event), msg.reqId, answer)
+						err := cl.con.Write(cl.globalCtx, websocket.MessageText, msg.buf.Bytes())
 						if err != nil {
 							cl.onError(fmt.Errorf("ack to event %s err: %w", msg.event, err))
 						}
 					}
+					bpool.Put(msg.buf)
 					continue
 				}
 				handler, ok := cl.getHandler(msg.event)
@@ -236,6 +236,7 @@ func (cl *client) startWorkers() {
 				} else {
 					cl.onDefault(msg.event, msg.body)
 				}
+				bpool.Put(msg.buf)
 			}
 		}()
 	}
@@ -247,7 +248,6 @@ func (cl *client) readConn() error {
 		return err
 	}
 	buf := bpool.Get()
-	defer bpool.Put(buf)
 	_, err = buf.ReadFrom(r)
 	if err != nil {
 		return err
@@ -258,19 +258,15 @@ func (cl *client) readConn() error {
 		cl.onError(err)
 		return nil
 	}
+	bodyCopy := make([]byte, len(body))
+	copy(bodyCopy, body)
 	if ack.IsAckEvent(event) {
 		if reqId > 0 {
-			bodyCopy := make([]byte, len(body))
-			copy(bodyCopy, body)
 			cl.ackers.TryAck(reqId, bodyCopy)
 		}
 		return nil
 	}
-
-	msg := EventMsg{event: event, reqId: reqId}
-	msg.body = make([]byte, len(body))
-	copy(msg.body, body)
-	cl.workersCh <- msg //EventMsg{event: event, reqId: reqId, body: body}
+	cl.workersCh <- EventMsg{event: event, reqId: reqId, body: bodyCopy, buf: buf}
 	return nil
 }
 

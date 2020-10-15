@@ -393,9 +393,10 @@ func clientHandlersWorkersTesting(t *testing.T, WorkersNum, WorkersChanBufferMul
 	defer httpServer.Close()
 
 	var connect Conn
-	connCh := make(chan Conn)
+	connCh := make(chan Conn) // -<
 	server.OnConnect(func(c Conn) {
-		connCh <- c
+		connCh <- c // -<
+		//connect = c // +<
 	})
 
 	cli := SetupTestClientWithConfig(httpServer.URL, client.Config{
@@ -416,7 +417,8 @@ func clientHandlersWorkersTesting(t *testing.T, WorkersNum, WorkersChanBufferMul
 		time.Sleep(500 * time.Millisecond)
 	})
 
-	connect = <-connCh
+	//time.Sleep(2*time.Second) // +<
+	connect = <-connCh // -<
 	wg := &sync.WaitGroup{}
 	wg.Add(3)
 	go func() {
@@ -464,7 +466,8 @@ func TestClientHandlersWorkers_AsyncDefault(t *testing.T) {
 	startTime := time.Now()
 	clientHandlersWorkersTesting(t, 3, 0)
 	deltaTime := time.Now().Sub(startTime)
-	if deltaTime > 550*time.Millisecond {
-		t.Errorf("Asynchron handling by workers is not working: Time expected less: 0.55s, got: %v", deltaTime)
+	maxDeltaTime := 550 * time.Millisecond
+	if deltaTime > maxDeltaTime {
+		t.Errorf("Asynchron handling by workers is not working: Time expected less: %v, got: %v", maxDeltaTime, deltaTime)
 	}
 }

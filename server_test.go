@@ -393,10 +393,9 @@ func clientHandlersWorkersTesting(t *testing.T, WorkersNum, WorkersChanBufferMul
 	defer httpServer.Close()
 
 	var connect Conn
-	connCh := make(chan Conn) // -<
+	connCh := make(chan Conn)
 	server.OnConnect(func(c Conn) {
-		connCh <- c // -<
-		//connect = c // +<
+		connCh <- c
 	})
 
 	cli := SetupTestClientWithConfig(httpServer.URL, client.Config{
@@ -417,8 +416,7 @@ func clientHandlersWorkersTesting(t *testing.T, WorkersNum, WorkersChanBufferMul
 		time.Sleep(500 * time.Millisecond)
 	})
 
-	//time.Sleep(2*time.Second) // +<
-	connect = <-connCh // -<
+	connect = <-connCh
 	wg := &sync.WaitGroup{}
 	wg.Add(3)
 	go func() {

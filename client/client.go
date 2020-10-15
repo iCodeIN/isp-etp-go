@@ -247,7 +247,13 @@ func (cl *client) readConn() error {
 	if err != nil {
 		return err
 	}
+	needPutBuf := true
 	buf := bpool.Get()
+	defer func() {
+		if needPutBuf {
+			bpool.Put(buf)
+		}
+	}()
 	_, err = buf.ReadFrom(r)
 	if err != nil {
 		return err
@@ -258,15 +264,16 @@ func (cl *client) readConn() error {
 		cl.onError(err)
 		return nil
 	}
-	bodyCopy := make([]byte, len(body))
-	copy(bodyCopy, body)
 	if ack.IsAckEvent(event) {
 		if reqId > 0 {
+			bodyCopy := make([]byte, len(body))
+			copy(bodyCopy, body)
 			cl.ackers.TryAck(reqId, bodyCopy)
 		}
 		return nil
 	}
-	cl.workersCh <- EventMsg{event: event, reqId: reqId, body: bodyCopy, buf: buf}
+	cl.workersCh <- EventMsg{event: event, reqId: reqId, body: body, buf: buf}
+	needPutBuf = false
 	return nil
 }
 

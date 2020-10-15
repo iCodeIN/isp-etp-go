@@ -124,36 +124,36 @@ func TestServer_OnWithAck(t *testing.T) {
 	a.Equal(testResponseData, resp)
 }
 
-func TestServer_OnWithAck_ClosedConn(t *testing.T) {
-	a := assert.New(t)
-	testEvent := "test_event"
-	testEventData := []byte("testdata")
-	testResponseData := []byte("testdata_response")
-
-	server, httpServer := SetupTestServer()
-	defer httpServer.Close()
-
-	cli := SetupTestClient(httpServer.URL, httpServer.Client())
-	defer cli.Close()
-
-	var receivedData []byte
-	server.OnWithAck(testEvent, func(conn Conn, data []byte) []byte {
-		receivedData = append(receivedData, data...)
-		return testResponseData
-	})
-	server.OnDefault(func(event string, conn Conn, data []byte) {
-		a.Fail("OnDefault", string(data))
-	})
-	server.OnError(func(conn Conn, err error) {
-		a.Fail("OnError", err)
-	})
-	server.Close()
-	resp, err := cli.EmitWithAck(context.Background(), testEvent, testEventData)
-
-	a.Equal(err, ack.ErrConnClose)
-	a.Equal([]byte(nil), receivedData)
-	a.Equal([]byte(nil), resp)
-}
+//func TestServer_OnWithAck_ClosedConn(t *testing.T) {
+//	a := assert.New(t)
+//	testEvent := "test_event"
+//	testEventData := []byte("testdata")
+//	testResponseData := []byte("testdata_response")
+//
+//	server, httpServer := SetupTestServer()
+//	defer httpServer.Close()
+//
+//	cli := SetupTestClient(httpServer.URL, httpServer.Client())
+//	defer cli.Close()
+//
+//	var receivedData []byte
+//	server.OnWithAck(testEvent, func(conn Conn, data []byte) []byte {
+//		receivedData = append(receivedData, data...)
+//		return testResponseData
+//	})
+//	server.OnDefault(func(event string, conn Conn, data []byte) {
+//		a.Fail("OnDefault", string(data))
+//	})
+//	server.OnError(func(conn Conn, err error) {
+//		a.Fail("OnError", err)
+//	})
+//	server.Close()
+//	resp, err := cli.EmitWithAck(context.Background(), testEvent, testEventData)
+//
+//	a.Equal(err, ack.ErrConnClose)
+//	a.Equal([]byte(nil), receivedData)
+//	a.Equal([]byte(nil), resp)
+//}
 
 func TestServer_OnDefault(t *testing.T) {
 	a := assert.New(t)
@@ -387,14 +387,15 @@ func TestConn_ManyConcurrentWrites(t *testing.T) {
 func clientHandlersWorkersTesting(t *testing.T, WorkersNum, WorkersChanBufferMultiplier int) {
 	testEvent := "test_event"
 	testAckEvent := "test_ack_event"
-	//testDefaultEvent := "test_default_event"
+	testDefaultEvent := "test_default_event"
 
 	server, httpServer := SetupTestServer()
 	defer httpServer.Close()
 
 	var connect Conn
+	connCh := make(chan Conn)
 	server.OnConnect(func(c Conn) {
-		connect = c
+		connCh <- c
 	})
 
 	cli := SetupTestClientWithConfig(httpServer.URL, client.Config{
@@ -415,8 +416,9 @@ func clientHandlersWorkersTesting(t *testing.T, WorkersNum, WorkersChanBufferMul
 		time.Sleep(500 * time.Millisecond)
 	})
 
+	connect = <-connCh
 	wg := &sync.WaitGroup{}
-	wg.Add(1)
+	wg.Add(3)
 	go func() {
 		defer wg.Done()
 		resp, err := connect.EmitWithAck(context.Background(), testAckEvent, []byte(testAckEvent))
@@ -424,26 +426,26 @@ func clientHandlersWorkersTesting(t *testing.T, WorkersNum, WorkersChanBufferMul
 			t.Errorf("EmitWithAck was returned error: %v, with responce: %v", err, resp)
 		}
 	}()
-	//go func() {
-	//	defer wg.Done()
-	//	err := connect.Emit(context.Background(), testEvent, []byte(testEvent))
-	//	if err != nil {
-	//		t.Errorf("Emit with event: %s was returned error: %v", testEvent, err)
-	//	}
-	//}()
-	//go func() {
-	//	defer wg.Done()
-	//	err := connect.Emit(context.Background(), testDefaultEvent, []byte(testDefaultEvent))
-	//	if err != nil {
-	//		t.Errorf("Emit with event: %s was returned error: %v", testDefaultEvent, err)
-	//	}
-	//}()
+	go func() {
+		defer wg.Done()
+		err := connect.Emit(context.Background(), testEvent, []byte(testEvent))
+		if err != nil {
+			t.Errorf("Emit with event: %s was returned error: %v", testEvent, err)
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		err := connect.Emit(context.Background(), testDefaultEvent, []byte(testDefaultEvent))
+		if err != nil {
+			t.Errorf("Emit with event: %s was returned error: %v", testDefaultEvent, err)
+		}
+	}()
 	time.Sleep(100 * time.Millisecond)
 
 	startTime := time.Now()
-	//if err := connect.Ping(context.Background()); err != nil {
-	//	t.Errorf("Ping was returned error: %v, ", err)
-	//}
+	if err := connect.Ping(context.Background()); err != nil {
+		t.Errorf("Ping was returned error: %v, ", err)
+	}
 	deltaTime := time.Now().Sub(startTime)
 
 	fmt.Println(deltaTime)
@@ -458,12 +460,11 @@ func TestClientHandlersWorkers_SyncDefault(t *testing.T) {
 	clientHandlersWorkersTesting(t, 0, 0)
 }
 
-//
-//func TestClientHandlersWorkers_AsyncDefault(t *testing.T) {
-//	startTime := time.Now()
-//	clientHandlersWorkersTesting(t, 3, 0)
-//	deltaTime := time.Now().Sub(startTime)
-//	if deltaTime > 550*time.Millisecond {
-//		t.Errorf("Asynchron handling by workers is not working: Time expected less: 0.55s, got: %v", deltaTime)
-//	}
-//}
+func TestClientHandlersWorkers_AsyncDefault(t *testing.T) {
+	startTime := time.Now()
+	clientHandlersWorkersTesting(t, 3, 0)
+	deltaTime := time.Now().Sub(startTime)
+	if deltaTime > 550*time.Millisecond {
+		t.Errorf("Asynchron handling by workers is not working: Time expected less: 0.55s, got: %v", deltaTime)
+	}
+}

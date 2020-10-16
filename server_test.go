@@ -13,9 +13,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/integration-system/isp-etp-go/v2/ack"
 	"github.com/integration-system/isp-etp-go/v2/client"
 	"github.com/stretchr/testify/assert"
+	"nhooyr.io/websocket"
 )
 
 func SetupTestServer() (Server, *httptest.Server) {
@@ -231,13 +231,13 @@ func TestConn_Close(t *testing.T) {
 		a.Fail("OnError", conn, err)
 	})
 
-	server.Close()
+	a.NoError(wait(wg, time.Second))
+
 	_, err := cli.EmitWithAck(context.Background(), testEvent, testEventData)
+	closeErr := new(websocket.CloseError)
+	a.True(errors.As(err, closeErr))
+	a.Equal(websocket.StatusNormalClosure, closeErr.Code)
 
-	err2 := wait(wg, time.Second)
-	a.NoError(err2)
-
-	a.Equal(err, ack.ErrConnClose)
 	a.EqualValues(disconnectedCount, 1)
 	a.EqualValues(connectedCount, 1)
 }

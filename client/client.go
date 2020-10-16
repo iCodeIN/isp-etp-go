@@ -85,9 +85,6 @@ func NewClient(config Config) Client {
 
 func (cl *client) CloseWithCode(code websocket.StatusCode, reason string) error {
 	defer func() {
-		if cl.cancel != nil {
-			cl.cancel()
-		}
 		cl.close()
 	}()
 	return cl.con.Close(code, reason)
@@ -277,6 +274,9 @@ func (cl *client) readConn() error {
 
 func (cl *client) close() {
 	cl.closeOnce.Do(func() {
+		if cl.cancel != nil {
+			cl.cancel()
+		}
 		close(cl.closeCh)
 		close(cl.workersCh)
 		cl.closed = true
